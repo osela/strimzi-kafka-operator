@@ -8,6 +8,7 @@ import io.fabric8.kubernetes.api.model.Event;
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.Quantity;
 import io.fabric8.kubernetes.api.model.ResourceRequirementsBuilder;
+import io.fabric8.kubernetes.api.model.Service;
 import io.strimzi.api.kafka.Crds;
 import io.strimzi.api.kafka.model.Kafka;
 import io.strimzi.api.kafka.model.KafkaClusterSpec;
@@ -48,6 +49,7 @@ import java.util.regex.Pattern;
 
 import static io.strimzi.api.kafka.model.KafkaResources.zookeeperStatefulSetName;
 import static io.strimzi.systemtest.Constants.REGRESSION;
+import static io.strimzi.systemtest.Resources.getSystemtestsServiceResource;
 import static io.strimzi.systemtest.k8s.Events.Created;
 import static io.strimzi.systemtest.k8s.Events.Killing;
 import static io.strimzi.systemtest.k8s.Events.Pulled;
@@ -385,7 +387,7 @@ class KafkaST extends MessagingBaseST {
         testMethodResources().kafkaEphemeral(CLUSTER_NAME, 3).done();
         testMethodResources().topic(CLUSTER_NAME, topicName).done();
 
-        testMethodResources().deployKafkaClients(CLUSTER_NAME).done();
+        testMethodResources().deployKafkaClients(CLUSTER_NAME, NAMESPACE).done();
 
         availabilityTest(messagesCount, TIMEOUT_AVAILABILITY_TEST, CLUSTER_NAME, false, topicName, null);
     }
@@ -418,7 +420,7 @@ class KafkaST extends MessagingBaseST {
         KafkaUser user = testMethodResources().tlsUser(CLUSTER_NAME, kafkaUser).done();
         waitTillSecretExists(kafkaUser);
 
-        testMethodResources().deployKafkaClients(true, CLUSTER_NAME, user).done();
+        testMethodResources().deployKafkaClients(true, CLUSTER_NAME, NAMESPACE, user).done();
         availabilityTest(messagesCount, TIMEOUT_AVAILABILITY_TEST, CLUSTER_NAME, true, topicName, user);
     }
 
@@ -461,7 +463,7 @@ class KafkaST extends MessagingBaseST {
             LOGGER.info("Broker pod log:\n----\n{}\n----\n", brokerPodLog);
         }
 
-        testMethodResources().deployKafkaClients(false, CLUSTER_NAME, user).done();
+        testMethodResources().deployKafkaClients(false, CLUSTER_NAME, NAMESPACE, user).done();
         availabilityTest(messagesCount, TIMEOUT_AVAILABILITY_TEST, CLUSTER_NAME, false, topicName, user);
     }
 
@@ -490,7 +492,7 @@ class KafkaST extends MessagingBaseST {
         KafkaUser user = testMethodResources().scramShaUser(CLUSTER_NAME, kafkaUser).done();
         waitTillSecretExists(kafkaUser);
 
-        testMethodResources().deployKafkaClients(true, CLUSTER_NAME, user).done();
+        testMethodResources().deployKafkaClients(true, CLUSTER_NAME, NAMESPACE, user).done();
         availabilityTest(messagesCount, 180000, CLUSTER_NAME, true, topicName, user);
     }
 
@@ -1060,8 +1062,9 @@ class KafkaST extends MessagingBaseST {
     @BeforeEach
     void createTestResources() throws Exception {
         createTestMethodResources();
-        testMethodResources.createServiceResource(Resources.KAFKA_CLIENTS, Environment.INGRESS_DEFAULT_PORT, NAMESPACE).done();
-        testMethodResources.createIngress(Resources.KAFKA_CLIENTS, Environment.INGRESS_DEFAULT_PORT, CONFIG.getMasterUrl(), NAMESPACE).done();
+        Service service = getSystemtestsServiceResource(Resources.KAFKA_CLIENTS, Environment.KAFKA_CLIENTS_DEFAULT_PORT);
+        testMethodResources.createServiceResource(service, NAMESPACE).done();
+        testMethodResources.createIngress(Resources.KAFKA_CLIENTS, Environment.KAFKA_CLIENTS_DEFAULT_PORT, CONFIG.getMasterUrl(), NAMESPACE).done();
     }
 
     @AfterEach

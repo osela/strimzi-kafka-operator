@@ -4,9 +4,12 @@
  */
 package io.strimzi.systemtest;
 
+import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.ContainerBuilder;
+import io.fabric8.kubernetes.api.model.ContainerPortBuilder;
 import io.fabric8.kubernetes.api.model.DoneableService;
 import io.fabric8.kubernetes.api.model.EnvVar;
+import io.fabric8.kubernetes.api.model.EnvVarBuilder;
 import io.fabric8.kubernetes.api.model.HasMetadata;
 import io.fabric8.kubernetes.api.model.IntOrString;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
@@ -644,7 +647,7 @@ public class Resources extends AbstractResources implements Constants {
     }
 
     DoneableDeployment clusterOperator(String namespace, String operationTimeout) {
-        return createNewDeployment(defaultCLusterOperator(namespace, operationTimeout).build());
+        return createNewDeployment(defaultCLusterOperator(namespace, operationTimeout).build(), namespace);
     }
 
     DeploymentBuilder defaultCLusterOperator(String namespace, String operationTimeout) {
@@ -699,12 +702,12 @@ public class Resources extends AbstractResources implements Constants {
                 .endSpec();
     }
 
-    DoneableDeployment createNewDeployment(Deployment deployment) {
+    DoneableDeployment createNewDeployment(Deployment deployment, String namespace) {
         return new DoneableDeployment(deployment, co -> {
             TestUtils.waitFor("Deployment creation", POLL_INTERVAL_FOR_RESOURCE_CREATION, TIMEOUT_FOR_RESOURCE_CREATION,
                 () -> {
                     try {
-                        client.apps().deployments().createOrReplace(co);
+                        client.apps().deployments().inNamespace(namespace).createOrReplace(co);
                         return true;
                     } catch (KubernetesClientException e) {
                         if (e.getMessage().contains("object is being deleted")) {
@@ -834,15 +837,15 @@ public class Resources extends AbstractResources implements Constants {
         return new DoneableKubernetesClusterRoleBinding(clusterRoleBinding);
     }
 
-    DoneableDeployment deployKafkaClients(String clusterName) {
-        return deployKafkaClients(false, clusterName, null);
+    DoneableDeployment deployKafkaClients(String clusterName, String namespace) {
+        return deployKafkaClients(false, clusterName, namespace, null);
     }
 
-    DoneableDeployment deployKafkaClients(boolean tlsListener, String clusterName) {
-        return deployKafkaClients(tlsListener, clusterName, null);
+    DoneableDeployment deployKafkaClients(boolean tlsListener, String clusterName, String namespace) {
+        return deployKafkaClients(tlsListener, clusterName, namespace, null);
     }
 
-    DoneableDeployment deployKafkaClients(boolean tlsListener, String clusterName, KafkaUser... kafkaUsers) {
+    DoneableDeployment deployKafkaClients(boolean tlsListener, String clusterName, String namespace, KafkaUser... kafkaUsers) {
         Deployment kafkaClient = new DeploymentBuilder()
             .withNewMetadata()
                 .withName(clusterName + "-" + KAFKA_CLIENTS)
@@ -861,10 +864,10 @@ public class Resources extends AbstractResources implements Constants {
             .endSpec()
             .build();
 
-        return createNewDeployment(kafkaClient);
+        return createNewDeployment(kafkaClient, namespace);
     }
 
-    private static Service getSystemtestsServiceResource(String appName, int port) {
+    protected static Service getSystemtestsServiceResource(String appName, int port) {
         return new ServiceBuilder()
             .withNewMetadata()
                 .withName(appName)
@@ -881,8 +884,7 @@ public class Resources extends AbstractResources implements Constants {
             .build();
     }
 
-    DoneableService createServiceResource(String appName, int port, String clientNamespace) {
-        Service service = getSystemtestsServiceResource(appName, port);
+    DoneableService createServiceResource(Service service, String clientNamespace) {
         LOGGER.info("Creating service {} in namespace {}", service.getMetadata().getName(), clientNamespace);
         client.services().inNamespace(clientNamespace).create(service);
         deleteLater(service);
@@ -927,11 +929,11 @@ public class Resources extends AbstractResources implements Constants {
                 .withName(KAFKA_CLIENTS)
                 .withImage(changeOrgAndTag("strimzi/test-client:latest-kafka-" + KAFKA_VERSION))
                 .addNewPort()
-                    .withContainerPort(4242)
+                    .withContainerPort(Environment.KAFKA_CLIENTS_DEFAULT_PORT)
                 .endPort()
                 .withNewLivenessProbe()
                     .withNewTcpSocket()
-                    .withNewPort(4242)
+                    .withNewPort(Environment.KAFKA_CLIENTS_DEFAULT_PORT)
                         .endTcpSocket()
                     .withInitialDelaySeconds(10)
                     .withPeriodSeconds(5)
@@ -1078,5 +1080,72 @@ public class Resources extends AbstractResources implements Constants {
             return envVar.get().getValue();
         }
         return "";
+    }
+
+    DeploymentBuilder defaultHttpBridge(String bootstrap, int port) {
+        Container container = new ContainerBuilder()
+                .withName(STRIMZI_BRIDGE_DEPLOYMENT_NAME)
+                .withImage("strimzi/kafka-bridge:latest")
+                .withImagePullPolicy("IfNotPresent")
+                .addToEnv(new EnvVarBuilder()
+                        .withName("KAFKA_BOOTSTRAP_SERVERS")
+                        .withValue(bootstrap).build())
+                .addToEnv(new EnvVarBuilder()
+                        .withName("HTTP_PORT")
+                        .withValue(Integer.toString(port)).build())
+                .addToEnv(new EnvVarBuilder()
+                        .withName("HTTP_MODE")
+                        .withValue("SERVER").build())
+                .withPorts(new ContainerPortBuilder()
+                        .withContainerPort(port)
+                        .withProtocol("TCP")
+                        .withName("http").build())
+                .withNewLivenessProbe()
+                    .withNewTcpSocket()
+                        .withPort(new IntOrString("http"))
+                    .endTcpSocket()
+                .endLivenessProbe().build();
+
+        return new DeploymentBuilder()
+                .withApiVersion("apps/v1")
+                .withNewMetadata()
+                    .withName(STRIMZI_BRIDGE_DEPLOYMENT_NAME)
+                    .addToLabels("app", "strimzi")
+                .endMetadata()
+                .withNewSpec()
+                .withNewSelector()
+                .addToMatchLabels("name", STRIMZI_BRIDGE_DEPLOYMENT_NAME)
+                .endSelector()
+                    .withNewReplicas(1)
+                    .withNewTemplate()
+                        .withNewMetadata()
+                            .addToLabels("name", STRIMZI_BRIDGE_DEPLOYMENT_NAME)
+                        .endMetadata()
+                        .withNewSpec()
+                            .withContainers(container)
+                        .endSpec()
+                    .endTemplate()
+                .endSpec();
+    }
+
+    DoneableDeployment httpBridge(String bootstrap, int port, String namespace) {
+        return createNewDeployment(defaultHttpBridge(bootstrap, port).build(), namespace);
+    }
+
+    protected static Service getBridgeServiceResource(int port, String type) {
+        return new ServiceBuilder()
+                .withNewMetadata()
+                .withName("strimzi-kafka-bridge")
+                .addToLabels("app", "strimzi")
+                .endMetadata()
+                .withNewSpec()
+                .withSelector(Collections.singletonMap("name", "strimzi-kafka-bridge"))
+                .addNewPort()
+                .withName(type)
+                .withPort(port)
+                .withProtocol("TCP")
+                .endPort()
+                .endSpec()
+                .build();
     }
 }
